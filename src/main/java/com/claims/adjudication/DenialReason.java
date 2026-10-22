@@ -1,0 +1,11 @@
+package com.claims.adjudication;
+
+public enum DenialReason {
+    INELIGIBLE_MEMBER,
+    SERVICE_NOT_COVERED,
+    REFERRAL_REQUIRED,
+    PRIOR_AUTHORIZATION_REQUIRED,
+    DUPLICATE_CLAIM,
+    TIMELY_FILING_EXCEEDED,
+    POLICY_TERMINATED
+}

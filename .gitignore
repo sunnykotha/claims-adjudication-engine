@@ -1,0 +1,12 @@
+target/
+.idea/
+.vscode/
+*.iml
+.classpath
+.project
+.settings/
+
+# Temporary and recovery backups
+*.backup-*
+*.before-*
+*.repair-backup-*
