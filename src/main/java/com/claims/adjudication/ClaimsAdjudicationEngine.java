@@ -207,6 +207,13 @@ public class ClaimsAdjudicationEngine {
             Claim claim,
             List<Claim> previouslySubmittedClaims,
             Accumulator initialAccumulator) {
+        return adjudicateWithAccumulator(
+                claim, previouslySubmittedClaims, initialAccumulator).results();
+    }
+    public BatchAdjudicationResult adjudicateWithAccumulator(
+            Claim claim,
+            List<Claim> previouslySubmittedClaims,
+            Accumulator initialAccumulator) {
 
         Objects.requireNonNull(claim, "claim must not be null");
         Objects.requireNonNull(
@@ -216,9 +223,21 @@ public class ClaimsAdjudicationEngine {
                 initialAccumulator,
                 "initialAccumulator must not be null");
 
+        boolean hasExistingAccumulatorAmounts =
+                !initialAccumulator.deductibleMet().isZero()
+                || !initialAccumulator.outOfPocketMet().isZero()
+                || !initialAccumulator.familyDeductibleMet().isZero();
+
+        if (initialAccumulator.serviceYear() == null
+                && hasExistingAccumulatorAmounts) {
+            throw new IllegalArgumentException(
+                    "A populated accumulator must include serviceYear "
+                            + "for batch adjudication");
+        }
+
         List<AdjudicationResult> results = new ArrayList<>();
         Accumulator currentAccumulator = initialAccumulator;
-        Integer previousServiceYear = null;
+        Integer previousServiceYear = initialAccumulator.serviceYear();
         List<Claim> claimsToCheck = new ArrayList<>(previouslySubmittedClaims);
         List<ClaimLine> processedLines = new ArrayList<>();
 
@@ -230,7 +249,15 @@ public class ClaimsAdjudicationEngine {
                 currentAccumulator = new Accumulator(
                         Money.zero(),
                         Money.zero(),
-                        Money.zero());
+                        Money.zero(),
+                        serviceYear);
+            } else if (currentAccumulator.serviceYear() != null
+                    && currentAccumulator.serviceYear() != serviceYear) {
+                currentAccumulator = new Accumulator(
+                        Money.zero(),
+                        Money.zero(),
+                        Money.zero(),
+                        serviceYear);
             }
 
             previousServiceYear = serviceYear;
@@ -275,15 +302,53 @@ public class ClaimsAdjudicationEngine {
                                 ? result.allowedAmount()
                                 : deductibleRemaining;
 
+                Money deductibleCredited =
+                        deductibleApplied.compareTo(result.patientResponsibility()) < 0
+                                ? deductibleApplied
+                                : result.patientResponsibility();
                 currentAccumulator = new Accumulator(
-                        currentAccumulator.deductibleMet().add(deductibleApplied),
+                        currentAccumulator.deductibleMet().add(deductibleCredited),
                         currentAccumulator.outOfPocketMet()
                                 .add(result.patientResponsibility()),
-                        currentAccumulator.familyDeductibleMet().add(deductibleApplied));
+                        currentAccumulator.familyDeductibleMet().add(deductibleCredited),
+                        serviceYear);
             }
         }
 
-        return List.copyOf(results);
+        return new BatchAdjudicationResult(List.copyOf(results), currentAccumulator);
+    }
+    public Money calculateRetroactiveRecovery(
+            AdjudicationResult previouslyPaidResult,
+            AdjudicationResult revisedResult) {
+
+        Objects.requireNonNull(
+                previouslyPaidResult,
+                "previouslyPaidResult must not be null");
+        Objects.requireNonNull(
+                revisedResult,
+                "revisedResult must not be null");
+
+        ClaimLine previousLine = previouslyPaidResult.claimLine();
+        ClaimLine revisedLine = revisedResult.claimLine();
+
+        if (!previousLine.lineId().equals(revisedLine.lineId())
+                || !previousLine.serviceDate().equals(revisedLine.serviceDate())
+                || !previousLine.procedureCode().equals(revisedLine.procedureCode())) {
+            throw new IllegalArgumentException(
+                    "Both results must refer to the same claim line");
+        }
+
+        if (previouslyPaidResult.isDenied()
+                || previouslyPaidResult.insurerPayment().isZero()) {
+            return Money.zero();
+        }
+
+        if (revisedResult.denialReason() == DenialReason.INELIGIBLE_MEMBER
+                || revisedResult.denialReason() == DenialReason.POLICY_TERMINATED) {
+            return previouslyPaidResult.insurerPayment();
+        }
+
+        return Money.zero();
     }
     private AdjudicationResult denied(
             ClaimLine line,

@@ -5,10 +5,18 @@ import java.util.Objects;
 public record Accumulator(
         Money deductibleMet,
         Money outOfPocketMet,
-        Money familyDeductibleMet) {
+        Money familyDeductibleMet,
+        Integer serviceYear) {
 
     public Accumulator(Money deductibleMet, Money outOfPocketMet) {
-        this(deductibleMet, outOfPocketMet, deductibleMet);
+        this(deductibleMet, outOfPocketMet, deductibleMet, null);
+    }
+
+    public Accumulator(
+            Money deductibleMet,
+            Money outOfPocketMet,
+            Money familyDeductibleMet) {
+        this(deductibleMet, outOfPocketMet, familyDeductibleMet, null);
     }
 
     public Accumulator {
@@ -32,7 +40,8 @@ public record Accumulator(
     }
 
     public static Accumulator zero() {
-        return new Accumulator(Money.zero(), Money.zero(), Money.zero());
+        return new Accumulator(
+                Money.zero(), Money.zero(), Money.zero(), null);
     }
 
     public Accumulator addDeductible(Money amount) {
@@ -45,7 +54,8 @@ public record Accumulator(
         return new Accumulator(
                 deductibleMet.add(amount),
                 outOfPocketMet.add(amount),
-                familyDeductibleMet.add(amount));
+                familyDeductibleMet.add(amount),
+                serviceYear);
     }
 
     public Accumulator addOutOfPocket(Money amount) {
@@ -58,6 +68,7 @@ public record Accumulator(
         return new Accumulator(
                 deductibleMet,
                 outOfPocketMet.add(amount),
-                familyDeductibleMet);
+                familyDeductibleMet,
+                serviceYear);
     }
 }

@@ -563,6 +563,55 @@ class ClaimsAdjudicationEngineTest {
     }
 
     @Test
+    void doesNotOverstateDeductibleWhenOutOfPocketMaximumCapsPayment() {
+        ClaimLine line = new ClaimLine(
+                "LINE-OOP-1",
+                LocalDate.of(2026, 3, 1),
+                "99213",
+                Money.of("500.00"));
+
+        Policy policy = new Policy(
+                "POL-OOP-1",
+                LocalDate.of(2026, 1, 1),
+                LocalDate.of(2026, 12, 31),
+                Money.of("500.00"),
+                new BigDecimal("0.20"),
+                Set.of("99213"),
+                Set.of(),
+                Set.of(),
+                Money.of("100.00"));
+
+        Claim claim = new Claim(
+                "CLAIM-OOP-1",
+                new Patient("PAT-OOP-1", "Test Patient"),
+                policy,
+                new Provider("PROV-OOP-1", "Test Provider", true),
+                LocalDate.of(2026, 4, 1),
+                List.of(line));
+
+        BatchAdjudicationResult batch = new ClaimsAdjudicationEngine()
+                .adjudicateWithAccumulator(
+                        claim, List.of(), Accumulator.zero());
+
+        assertEquals(1, batch.results().size());
+        assertEquals(
+                Money.of("100.00"),
+                batch.results().get(0).patientResponsibility());
+        assertEquals(
+                Money.of("400.00"),
+                batch.results().get(0).insurerPayment());
+
+        assertEquals(
+                Money.of("100.00"),
+                batch.finalAccumulator().deductibleMet());
+        assertEquals(
+                Money.of("100.00"),
+                batch.finalAccumulator().familyDeductibleMet());
+        assertEquals(
+                Money.of("100.00"),
+                batch.finalAccumulator().outOfPocketMet());
+    }
+    @Test
     void processesClaimLinesInOrderAndUpdatesAccumulators() {
         ClaimLine firstLine = new ClaimLine(
                 "LINE-1",
@@ -639,7 +688,8 @@ class ClaimsAdjudicationEngineTest {
         Accumulator initialAccumulator = new Accumulator(
                 Money.of("0.00"),
                 Money.of("0.00"),
-                Money.of("500.00"));
+                Money.of("500.00"),
+                2026);
 
         List<AdjudicationResult> results = new ClaimsAdjudicationEngine()
                 .adjudicate(claim, List.of(), initialAccumulator);
@@ -651,6 +701,83 @@ class ClaimsAdjudicationEngineTest {
         assertEquals(Money.of("480.00"), results.get(1).insurerPayment());
     }
 
+    @Test
+    void familyDeductibleCarriesAcrossSeparateFamilyMemberClaims() {
+        Policy familyPolicy = new Policy(
+                "POL-FAMILY-SEPARATE",
+                LocalDate.of(2026, 1, 1),
+                LocalDate.of(2026, 12, 31),
+                Money.of("1000.00"),
+                new BigDecimal("0.20"),
+                Set.of("99213"),
+                Set.of(),
+                Set.of(),
+                null,
+                Money.of("1000.00"));
+
+        Provider provider =
+                new Provider("PROV-FAMILY-SEPARATE", "Test Provider", true);
+
+        Claim firstClaim = new Claim(
+                "CLAIM-FAMILY-MEMBER-1",
+                new Patient("PAT-FAMILY-MEMBER-1", "First Member", "FAMILY-SHARED"),
+                familyPolicy,
+                provider,
+                LocalDate.of(2026, 4, 1),
+                List.of(new ClaimLine(
+                        "LINE-FAMILY-MEMBER-1",
+                        LocalDate.of(2026, 3, 1),
+                        "99213",
+                        Money.of("600.00"))));
+
+        ClaimsAdjudicationEngine engine = new ClaimsAdjudicationEngine();
+
+        BatchAdjudicationResult firstBatch = engine.adjudicateWithAccumulator(
+                firstClaim,
+                List.of(),
+                Accumulator.zero());
+
+        assertEquals(
+                Money.of("600.00"),
+                firstBatch.results().get(0).patientResponsibility());
+        assertEquals(
+                Money.of("600.00"),
+                firstBatch.finalAccumulator().familyDeductibleMet());
+
+        Claim secondClaim = new Claim(
+                "CLAIM-FAMILY-MEMBER-2",
+                new Patient("PAT-FAMILY-MEMBER-2", "Second Member", "FAMILY-SHARED"),
+                familyPolicy,
+                provider,
+                LocalDate.of(2026, 4, 2),
+                List.of(new ClaimLine(
+                        "LINE-FAMILY-MEMBER-2",
+                        LocalDate.of(2026, 3, 2),
+                        "99213",
+                        Money.of("600.00"))));
+
+        Accumulator secondMemberAccumulator = new Accumulator(
+                Money.zero(),
+                Money.zero(),
+                firstBatch.finalAccumulator().familyDeductibleMet(),
+                2026);
+
+        BatchAdjudicationResult secondBatch = engine.adjudicateWithAccumulator(
+                secondClaim,
+                List.of(),
+                secondMemberAccumulator);
+
+        AdjudicationResult secondResult = secondBatch.results().get(0);
+
+        assertEquals(Money.of("440.00"), secondResult.patientResponsibility());
+        assertEquals(Money.of("160.00"), secondResult.insurerPayment());
+        assertEquals(
+                Money.of("1000.00"),
+                secondBatch.finalAccumulator().familyDeductibleMet());
+        assertEquals(
+                Money.of("400.00"),
+                secondBatch.finalAccumulator().deductibleMet());
+    }
     @Test
     void resetsOutOfPocketMaximumWhenServiceYearChanges() {
         ClaimLine decemberLine = new ClaimLine(
@@ -686,7 +813,9 @@ class ClaimsAdjudicationEngineTest {
 
         Accumulator startingAccumulator = new Accumulator(
                 Money.of("0.00"),
-                Money.of("900.00"));
+                Money.of("900.00"),
+                Money.of("0.00"),
+                2026);
 
         List<AdjudicationResult> results = new ClaimsAdjudicationEngine(90)
                 .adjudicate(claim, List.of(), startingAccumulator);
@@ -860,5 +989,52 @@ class ClaimsAdjudicationEngineTest {
                 revisedResult.denialReason());
         assertEquals(Money.zero(), revisedResult.insurerPayment());
         assertEquals(Money.zero(), revisedResult.patientResponsibility());
+        assertEquals(
+                originallyPaid.insurerPayment(),
+                engine.calculateRetroactiveRecovery(
+                        originallyPaid, revisedResult));
+    }
+
+    @Test
+    void resetsAccumulatorWhenClaimStartsInANewServiceYear() {
+        ClaimLine januaryLine = new ClaimLine(
+                "LINE-JAN",
+                LocalDate.of(2027, 1, 1),
+                "99213",
+                Money.of("600.00"));
+
+        Policy policy = new Policy(
+                "POL-RESET",
+                LocalDate.of(2026, 1, 1),
+                LocalDate.of(2027, 12, 31),
+                Money.of("1000.00"),
+                new BigDecimal("0.20"),
+                Set.of("99213"),
+                Set.of(),
+                Set.of(),
+                Money.of("1000.00"));
+
+        Claim claim = new Claim(
+                "CLAIM-JAN",
+                new Patient("PAT-RESET", "Test Patient"),
+                policy,
+                new Provider("PROV-RESET", "Test Provider"),
+                LocalDate.of(2027, 1, 2),
+                List.of(januaryLine));
+
+        Accumulator previousYearAccumulator = new Accumulator(
+                Money.of("800.00"),
+                Money.of("900.00"),
+                Money.of("800.00"),
+                2026);
+
+        List<AdjudicationResult> results = new ClaimsAdjudicationEngine(90)
+                .adjudicate(claim, List.of(), previousYearAccumulator);
+
+        assertEquals(1, results.size());
+        assertFalse(results.get(0).isDenied());
+        assertEquals(Money.of("600.00"),
+                results.get(0).patientResponsibility());
+        assertEquals(Money.zero(), results.get(0).insurerPayment());
     }
 }
