@@ -21,7 +21,9 @@ public record Policy(
         Set<String> referralRequiredProcedureCodes,
         Set<String> priorAuthorizationRequiredProcedureCodes,
         Money outOfPocketMaximum,
-        Money familyDeductible) {
+        Money familyDeductible,
+        Money copayAmount,
+        BigDecimal outOfNetworkCoinsuranceRate) {
 
     public Policy(
             String policyId,
@@ -32,7 +34,7 @@ public record Policy(
             Set<String> coveredProcedureCodes) {
         this(policyId, effectiveDate, terminationDate, annualDeductible,
                 coinsuranceRate, coveredProcedureCodes, Set.of(), Set.of(),
-                null, null);
+                null, null, null, null);
     }
 
     public Policy(
@@ -47,7 +49,8 @@ public record Policy(
         this(policyId, effectiveDate, terminationDate, annualDeductible,
                 coinsuranceRate, coveredProcedureCodes,
                 referralRequiredProcedureCodes,
-                priorAuthorizationRequiredProcedureCodes, null, null);
+                priorAuthorizationRequiredProcedureCodes,
+                null, null, null, null);
     }
 
     public Policy(
@@ -64,7 +67,28 @@ public record Policy(
                 coinsuranceRate, coveredProcedureCodes,
                 referralRequiredProcedureCodes,
                 priorAuthorizationRequiredProcedureCodes,
-                outOfPocketMaximum, null);
+                outOfPocketMaximum, null, null, null);
+    }
+
+    /**
+     * Preserves compatibility with the previous ten-argument constructor.
+     */
+    public Policy(
+            String policyId,
+            LocalDate effectiveDate,
+            LocalDate terminationDate,
+            Money annualDeductible,
+            BigDecimal coinsuranceRate,
+            Set<String> coveredProcedureCodes,
+            Set<String> referralRequiredProcedureCodes,
+            Set<String> priorAuthorizationRequiredProcedureCodes,
+            Money outOfPocketMaximum,
+            Money familyDeductible) {
+        this(policyId, effectiveDate, terminationDate, annualDeductible,
+                coinsuranceRate, coveredProcedureCodes,
+                referralRequiredProcedureCodes,
+                priorAuthorizationRequiredProcedureCodes,
+                outOfPocketMaximum, familyDeductible, null, null);
     }
 
     public Policy {
@@ -101,10 +125,19 @@ public record Policy(
             throw new IllegalArgumentException(
                     "Family deductible cannot be negative");
         }
-        if (coinsuranceRate.compareTo(BigDecimal.ZERO) < 0
-                || coinsuranceRate.compareTo(BigDecimal.ONE) > 0) {
+        if (copayAmount != null && copayAmount.isNegative()) {
             throw new IllegalArgumentException(
-                    "Coinsurance rate must be between 0 and 1");
+                    "Copay amount cannot be negative");
+        }
+        validateRate(coinsuranceRate, "Coinsurance rate");
+        if (outOfNetworkCoinsuranceRate != null) {
+            validateRate(outOfNetworkCoinsuranceRate,
+                    "Out-of-network coinsurance rate");
+            if (outOfNetworkCoinsuranceRate.compareTo(coinsuranceRate) <= 0) {
+                throw new IllegalArgumentException(
+                        "Out-of-network coinsurance rate must be greater "
+                                + "than the in-network coinsurance rate");
+            }
         }
 
         coveredProcedureCodes = normalizeCodes(coveredProcedureCodes);
@@ -112,6 +145,14 @@ public record Policy(
                 normalizeCodes(referralRequiredProcedureCodes);
         priorAuthorizationRequiredProcedureCodes =
                 normalizeCodes(priorAuthorizationRequiredProcedureCodes);
+    }
+
+    private static void validateRate(BigDecimal rate, String fieldName) {
+        if (rate.compareTo(BigDecimal.ZERO) < 0
+                || rate.compareTo(BigDecimal.ONE) > 0) {
+            throw new IllegalArgumentException(
+                    fieldName + " must be between 0 and 1");
+        }
     }
 
     private static Set<String> normalizeCodes(Set<String> codes) {

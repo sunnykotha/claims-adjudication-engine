@@ -346,6 +346,97 @@ class ClaimsAdjudicationEngineTest {
     }
 
     @Test
+    void appliesFlatCopayInsteadOfCoinsuranceAfterDeductible() {
+        ClaimLine line = new ClaimLine(
+                "LINE-COPAY",
+                LocalDate.of(2026, 3, 1),
+                "99213",
+                Money.of("200.00"),
+                true,
+                true,
+                Money.of("200.00"),
+                Money.of("200.00"));
+
+        Policy policy = new Policy(
+                "POL-COPAY",
+                LocalDate.of(2026, 1, 1),
+                LocalDate.of(2026, 12, 31),
+                Money.of("1000.00"),
+                new BigDecimal("0.20"),
+                Set.of("99213"),
+                Set.of(),
+                Set.of(),
+                null,
+                null,
+                Money.of("25.00"),
+                null);
+
+        Claim claim = new Claim(
+                "CLAIM-COPAY",
+                new Patient("PAT-1", "Test Patient"),
+                policy,
+                new Provider("PROV-1", "Test Provider", true),
+                LocalDate.of(2026, 4, 1),
+                List.of(line));
+
+        AdjudicationResult result = new ClaimsAdjudicationEngine()
+                .adjudicate(claim, line,
+                        new Accumulator(
+                                Money.of("1000.00"),
+                                Money.zero()));
+
+        assertEquals(Money.of("200.00"), result.allowedAmount());
+        assertEquals(Money.of("25.00"), result.patientResponsibility());
+        assertEquals(Money.of("175.00"), result.insurerPayment());
+        assertFalse(result.isDenied());
+    }
+
+    @Test
+    void appliesConfiguredHigherOutOfNetworkCoinsuranceRate() {
+        ClaimLine line = new ClaimLine(
+                "LINE-OON",
+                LocalDate.of(2026, 3, 1),
+                "99213",
+                Money.of("200.00"),
+                true,
+                true,
+                Money.of("200.00"),
+                Money.of("200.00"));
+
+        Policy policy = new Policy(
+                "POL-OON",
+                LocalDate.of(2026, 1, 1),
+                LocalDate.of(2026, 12, 31),
+                Money.of("1000.00"),
+                new BigDecimal("0.20"),
+                Set.of("99213"),
+                Set.of(),
+                Set.of(),
+                null,
+                null,
+                null,
+                new BigDecimal("0.40"));
+
+        Claim claim = new Claim(
+                "CLAIM-OON",
+                new Patient("PAT-1", "Test Patient"),
+                policy,
+                new Provider("PROV-1", "Test Provider", false),
+                LocalDate.of(2026, 4, 1),
+                List.of(line));
+
+        AdjudicationResult result = new ClaimsAdjudicationEngine()
+                .adjudicate(claim, line,
+                        new Accumulator(
+                                Money.of("1000.00"),
+                                Money.zero()));
+
+        assertEquals(Money.of("120.00"), result.allowedAmount());
+        assertEquals(Money.of("48.00"), result.patientResponsibility());
+        assertEquals(Money.of("72.00"), result.insurerPayment());
+        assertFalse(result.isDenied());
+    }
+    @Test
     void calculatesDeductibleAndCoinsuranceForWorkedExample() {
         ClaimLine line = new ClaimLine(
                 "LINE-1",
@@ -560,6 +651,52 @@ class ClaimsAdjudicationEngineTest {
         assertEquals(Money.of("480.00"), results.get(1).insurerPayment());
     }
 
+    @Test
+    void resetsOutOfPocketMaximumWhenServiceYearChanges() {
+        ClaimLine decemberLine = new ClaimLine(
+                "LINE-1",
+                LocalDate.of(2026, 12, 31),
+                "99213",
+                Money.of("600.00"));
+
+        ClaimLine januaryLine = new ClaimLine(
+                "LINE-2",
+                LocalDate.of(2027, 1, 1),
+                "99214",
+                Money.of("600.00"));
+
+        Policy policy = new Policy(
+                "POL-1",
+                LocalDate.of(2026, 1, 1),
+                LocalDate.of(2027, 12, 31),
+                Money.of("1000.00"),
+                new BigDecimal("0.20"),
+                Set.of("99213", "99214"),
+                Set.of(),
+                Set.of(),
+                Money.of("1000.00"));
+
+        Claim claim = new Claim(
+                "CLAIM-1",
+                new Patient("PAT-1", "Test Patient"),
+                policy,
+                new Provider("PROV-1", "Test Provider", true),
+                LocalDate.of(2027, 1, 2),
+                List.of(decemberLine, januaryLine));
+
+        Accumulator startingAccumulator = new Accumulator(
+                Money.of("0.00"),
+                Money.of("900.00"));
+
+        List<AdjudicationResult> results = new ClaimsAdjudicationEngine(90)
+                .adjudicate(claim, List.of(), startingAccumulator);
+
+        assertEquals(2, results.size());
+        assertEquals(Money.of("100.00"),
+                results.get(0).patientResponsibility());
+        assertEquals(Money.of("600.00"),
+                results.get(1).patientResponsibility());
+    }
     @Test
     void resetsDeductibleWhenServiceYearChanges() {
         ClaimLine decemberLine = new ClaimLine(

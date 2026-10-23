@@ -148,11 +148,28 @@ public class ClaimsAdjudicationEngine {
                 : deductibleRemaining;
 
         Money amountAfterDeductible = allowedAmount.subtract(deductibleApplied);
-        Money coinsurance = new Money(
-                amountAfterDeductible.amount()
-                        .multiply(claim.policy().coinsuranceRate()));
 
-        Money patientResponsibility = deductibleApplied.add(coinsurance);
+        Money patientCostShare;
+        if (amountAfterDeductible.isZero()) {
+            patientCostShare = Money.zero();
+        } else if (claim.policy().copayAmount() != null) {
+            patientCostShare = claim.policy().copayAmount()
+                    .compareTo(amountAfterDeductible) < 0
+                    ? claim.policy().copayAmount()
+                    : amountAfterDeductible;
+        } else {
+            BigDecimal applicableCoinsuranceRate =
+                    !claim.provider().inNetwork()
+                            && claim.policy().outOfNetworkCoinsuranceRate() != null
+                            ? claim.policy().outOfNetworkCoinsuranceRate()
+                            : claim.policy().coinsuranceRate();
+
+            patientCostShare = new Money(
+                    amountAfterDeductible.amount()
+                            .multiply(applicableCoinsuranceRate));
+        }
+
+        Money patientResponsibility = deductibleApplied.add(patientCostShare);
 
         if (claim.policy().outOfPocketMaximum() != null) {
             Money outOfPocketRemaining = claim.policy().outOfPocketMaximum()
@@ -212,7 +229,7 @@ public class ClaimsAdjudicationEngine {
                     && previousServiceYear != serviceYear) {
                 currentAccumulator = new Accumulator(
                         Money.zero(),
-                        currentAccumulator.outOfPocketMet(),
+                        Money.zero(),
                         Money.zero());
             }
 
